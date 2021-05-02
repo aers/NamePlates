@@ -52,6 +52,17 @@ namespace NamePlates.Hooks
 
         private AtkResNodeSetPositionShortPrototype atkResNodeSetPositionShortFunc;
 
+        private delegate bool AtkResNodeIsUsingDepthBasedDrawPriorityPrototype(AtkResNode* thisPtr);
+
+        private AtkResNodeIsUsingDepthBasedDrawPriorityPrototype atkResNodeIsUsingDepthBasedDrawPriorityFunc;
+
+        private delegate void AtkResNodeSetUseDepthBasedDrawPriorityPrototype(AtkResNode* thisPtr, bool enable);
+
+        private AtkResNodeSetUseDepthBasedDrawPriorityPrototype atkResNodeSetUseDepthBasedDrawPriorityFunc;
+
+        private delegate AtkResNode* AtkUldManagerSearchNodeByIndexPrototype(AtkUldManager* thisPtr, uint index);
+
+        private AtkUldManagerSearchNodeByIndexPrototype atkUldManagerSearchNodeByIndexFunc;
 
         public AddonNamePlateHooks(Plugin p)
         {
@@ -111,6 +122,23 @@ namespace NamePlates.Hooks
                 this._p.pluginInterface.TargetModuleScanner.ScanText("E8 ?? ?? ?? ?? 8D 56 B5");
             atkResNodeSetPositionShortFunc =
                 Marshal.GetDelegateForFunctionPointer<AtkResNodeSetPositionShortPrototype>(setPositionAddress);
+
+            var getDepthPriorityAddress =
+                this._p.pluginInterface.TargetModuleScanner.ScanText("E8 ?? ?? ?? ?? 41 3A C4 74 61");
+            atkResNodeIsUsingDepthBasedDrawPriorityFunc =
+                Marshal.GetDelegateForFunctionPointer<AtkResNodeIsUsingDepthBasedDrawPriorityPrototype>(
+                    getDepthPriorityAddress);
+
+            var setDepthPriorityAddress =
+                this._p.pluginInterface.TargetModuleScanner.ScanText("E8 ?? ?? ?? ?? FF C6 3B F5 72 E5 BA ?? ?? ?? ??");
+            atkResNodeSetUseDepthBasedDrawPriorityFunc =
+                Marshal.GetDelegateForFunctionPointer<AtkResNodeSetUseDepthBasedDrawPriorityPrototype>(
+                    setDepthPriorityAddress);
+
+            var findNodeAddress =
+                this._p.pluginInterface.TargetModuleScanner.ScanText("E8 ?? ?? ?? ?? 48 8B C8 3B DD");
+            atkUldManagerSearchNodeByIndexFunc =
+                Marshal.GetDelegateForFunctionPointer<AtkUldManagerSearchNodeByIndexPrototype>(findNodeAddress);
         }
 
         private void AddonNameplateOnUpdateDetour(AddonNamePlate* thisPtr, NumberArrayData** numberData,
@@ -136,7 +164,7 @@ namespace NamePlates.Hooks
             }
 
             var doFullUpdate = numbers->IntArray[4];
-            bool doFullUpdatedChanged = (doFullUpdate != thisPtr->DoFullUpdate);
+            bool doFullUpdateChanged = (doFullUpdate != thisPtr->DoFullUpdate);
             thisPtr->DoFullUpdate = doFullUpdate != 0 ? (byte)1 : (byte)0;
 
             var nameplateScale = (float) numbers->IntArray[2]; // this is from "Display Name Size" in nameplate config
@@ -176,6 +204,40 @@ namespace NamePlates.Hooks
                     SetCommon(&npObj, x, y, depth, scale, finalScale);
 
                     var flags = numbers->IntArray[numberArrayIndex + 17];
+
+                    var useDepthBasedDrawPriority = (flags & 0x8) != 0;
+
+                    if (useDepthBasedDrawPriority != atkResNodeIsUsingDepthBasedDrawPriorityFunc((AtkResNode*)npObj.RootNode))
+                    {
+                        atkResNodeSetUseDepthBasedDrawPriorityFunc((AtkResNode*) npObj.RootNode, useDepthBasedDrawPriority);
+
+                        var rootComponent = npObj.RootNode->Component;
+
+                        if (rootComponent->UldManager.Objects != null)
+                        {
+                            var count = rootComponent->UldManager.Objects->NodeCount +
+                                        rootComponent->UldManager.UnknownCount; // not sure what unknown count is here
+
+                            for (uint nodeIndex = 0; nodeIndex < count; nodeIndex++)
+                            {
+                                var node = atkUldManagerSearchNodeByIndexFunc(&rootComponent->UldManager, nodeIndex);
+                                atkResNodeSetUseDepthBasedDrawPriorityFunc(node, useDepthBasedDrawPriority);
+                            }
+                        }
+                    }
+
+                    bool disableAlternatePartId = (flags & 0x100) != 0;
+
+                    if (disableAlternatePartId)
+                    {
+                        npObj.ImageNode5->PartId = 1;
+                    }
+                    else
+                    {
+                        npObj.ImageNode5->PartId = thisPtr->AlternatePartId;
+                    }
+
+                    byte updatesRequestedState = (byte)numbers->IntArray[numberArrayIndex + 2];
                 }
             }
         }
